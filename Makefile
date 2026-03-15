@@ -73,7 +73,7 @@ $(TARGET).nds: $(TARGET).arm9 $(TARGET).arm7
 	@echo "Building $@"
 	@ndstool -c $@ -9 $(TARGET).arm9 -7 $(TARGET).arm7
 	@echo "Done!"
-	@./MAKE_NDS.sh
+	@sh MAKE_NDS.sh
 
 clean:
 	@echo "Cleaning..."
