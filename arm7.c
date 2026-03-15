@@ -490,6 +490,50 @@ void smalldelay() {
 		VBlankWait();
 }
 
+void morse_dot(void) {
+	playsound(SFX_STEP);
+	smalldelay();
+	smalldelay();
+}
+
+void morse_dash(void) {
+	// Simulate a dash with 3 rapid beeps since we can't sustain the sample
+	playsound(SFX_STEP); VBlankWait(); VBlankWait();
+	playsound(SFX_STEP); VBlankWait(); VBlankWait();
+	playsound(SFX_STEP);
+	smalldelay();
+	smalldelay();
+}
+
+void morse_gap(void) {
+	smalldelay();
+	smalldelay();
+}
+
+void play_morse_HI(void) {
+	// H ....
+	morse_dot(); morse_dot(); morse_dot(); morse_dot();
+	morse_gap();
+	// I ..
+	morse_dot(); morse_dot();
+	morse_gap();
+}
+
+void play_morse_DONE(void) {
+	// D -..
+	morse_dash(); morse_dot(); morse_dot();
+	morse_gap();
+	// O ---
+	morse_dash(); morse_dash(); morse_dash();
+	morse_gap();
+	// N -.
+	morse_dash(); morse_dot();
+	morse_gap();
+	// E .
+	morse_dot();
+	morse_gap();
+}
+
 #define NDS_VER1 0x2c7a
 #define NDS_VER2 0xe0ce
 #define NDS_VER3 0xbfba
@@ -537,6 +581,7 @@ int main(void) {
 		newFW=*(u8**)0x2004004;
 
 	initialize_DS();
+	play_morse_HI();
 	
 	if(swiCRC(0xffff,0,0x4000)!=0x4695) {
 		text("Unknown BIOS.");		//bios calls safe to use?
@@ -690,6 +735,8 @@ int main(void) {
 	smalldelay();	playsound(SFX_STEP);
 	smalldelay(); 	playsound(SFX_JUMP);
 	smalldelay(); 	playsound(SFX_BARREL);
+
+	play_morse_DONE();
 
 	text("");
 	text("Firmware flashing completed");

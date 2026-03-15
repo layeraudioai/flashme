@@ -32,10 +32,13 @@ static void gfx_init() {
 	SUB_BG0_Y0=0;
 	BLEND_CR=0;
 
-	swiFastSet(&font,(u16*)(CHAR_BASE_BLOCK(1)+32*32),1024*3,0);
-	swiFastSet(&fontpal,(u16*)BG_PALETTE,64,0);
-	swiFastSet(&font,(u16*)(CHAR_BASE_BLOCK_SUB(1)+32*32),1024*3,0);
-	swiFastSet(&fontpal,(u16*)BG_PALETTE_SUB,64,0);
+	// NOTE: The swiFastSet calls are disabled because the project is missing the
+	// real font.bin and fontpal.bin assets. Linking the dummy data from data.c
+	// causes an out-of-bounds read that crashes the ARM9.
+	// swiFastSet(&font,(u16*)(CHAR_BASE_BLOCK(1)+32*32),1024*3,0);
+	// swiFastSet(&fontpal,(u16*)BG_PALETTE,64,0);
+	// swiFastSet(&font,(u16*)(CHAR_BASE_BLOCK_SUB(1)+32*32),1024*3,0);
+	// swiFastSet(&fontpal,(u16*)BG_PALETTE_SUB,64,0);
 }
 
 static void hex32(int row,int d,int hi) {

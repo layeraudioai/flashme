@@ -18,8 +18,11 @@ void gfx_init() {
 		*(p2++)=' ';	//screen buffer clear
 	}
 
-	swiFastSet(&font,(u16*)(CHAR_BASE_BLOCK(1)+32*32),1024*3,0);
-	swiFastSet(&fontpal,(u16*)BG_PALETTE,64,0);
+	// NOTE: The swiFastSet calls are disabled because the project is missing the
+	// real font.bin and fontpal.bin assets. Linking the dummy data from data.c
+	// causes an out-of-bounds read that crashes the ARM9.
+	// swiFastSet(&font,(u16*)(CHAR_BASE_BLOCK(1)+32*32),1024*3,0);
+	// swiFastSet(&fontpal,(u16*)BG_PALETTE,64,0);
  
 	DISPLAY_CR=MODE_0_2D|DISPLAY_BG0_ACTIVE;
 	BG0_CR=BG_TILE_BASE(1);
@@ -76,7 +79,7 @@ static void interrupthandler() {
 	VBLANK_INTR_WAIT_FLAGS|=flags;
 	if(flags&IRQ_VBLANK)
 		VblankInterrupt();
-	if(flags&IRQ_FIFO_FULL)
+	if(flags&IRQ_FIFO_RECV)
 		FifoInterrupt();
 	IF=flags;				//irq ack
 }
@@ -89,7 +92,7 @@ int main(void) {
 	IME=0;
 	DISP_SR=DISP_VBLANK_IRQ;
 	IRQ_HANDLER=interrupthandler;
-	IE=IRQ_VBLANK|IRQ_FIFO_FULL;
+	IE=IRQ_VBLANK|IRQ_FIFO_RECV;
 	IF=~0;
 	IME=IME_ENABLED;
 
