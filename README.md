@@ -1,3 +1,7 @@
+# 2026 update
+adding wifi settings support to the os without need for a game to be inserted. ITS WIP but underway
+release v9 will be the xbcx release when its finished. right now its v9-fail cause WIP
+
 # flashme
 re-upload to preserve and maintain the source code of flashme for Nintendo DS/DS lite custom firmware.
 *flashme is by	Loopy, FireFly, DarkFader
