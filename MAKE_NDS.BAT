@@ -1,0 +1,1 @@
+ndstool -c flashme.nds -7 flashme_data\arm7bin\arm7.bin -9 flashme_data\arm9bin\arm9.bin -r9 0x2004000 -r7 0x2380000 -b icon.bmp "FlashMe;http://ds.gcdev.com/dsfirmware"
