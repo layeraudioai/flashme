@@ -179,6 +179,40 @@ int find_pattern(u8 *data, u32 size, const u8 *pattern, u32 pat_len) {
    This attempts to hijack an existing menu slot or add a new one.
 */
 void patch_firmware_ui(u8 *fw) {
+	// --- Automated Reverse Engineering ---
+	// This function will attempt to find all necessary components on its own
+	// by searching for unique strings within the firmware binary.
+
+	// --- Part 1: Find the address of the User Message Keyboard function ---
+	u32 addr_keyboard_func = 0;
+	const u8 msg_kbd_sig[] = {'M',0,'e',0,'s',0,'s',0,'a',0,'g',0,'e',0};
+	int msg_kbd_str_offset = find_pattern(fw, 0x40000, msg_kbd_sig, sizeof(msg_kbd_sig));
+
+	if (msg_kbd_str_offset != -1) {
+		u32 arm9_ram_addr_for_str = (*(u32*)(fw + 0x24));
+		u32 msg_kbd_str_ram_addr = arm9_ram_addr_for_str + (msg_kbd_str_offset - (*(u32*)(fw + 0x20)));
+		int msg_kbd_ref_offset = find_pattern(fw, 0x40000, (u8*)&msg_kbd_str_ram_addr, 4);
+
+		if (msg_kbd_ref_offset != -1) {
+			// Heuristic scan for the function pointer near the string reference
+			int i;
+			for (i = 4; i <= 16; i += 4) {
+				u32 *ptr = (u32*)(fw + msg_kbd_ref_offset + i);
+				if ((*ptr & 0xFF000000) == 0x02000000) { // Is it a RAM address?
+					addr_keyboard_func = *ptr;
+					text("Keyboard Func Found!");
+					break;
+				}
+			}
+		}
+	}
+
+	if (addr_keyboard_func == 0) {
+		text("Keyboard Func NOT Found!");
+		smalldelay();
+		return; // Abort patch if we can't find the keyboard
+	}
+
 	// Get ARM9 offset and size from NDS Header
 	u32 arm9_off = *(u32*)(fw + 0x20);
 	u32 arm9_ram_addr = *(u32*)(fw + 0x24);
@@ -203,12 +237,12 @@ void patch_firmware_ui(u8 *fw) {
     
 
 	// --- Step 2: Find the UI table to patch ---
-	// Automated Detection: Find "PictoChat" string (UTF-16LE)
+	// Automated Detection: Find "Language" string (UTF-16LE) to hijack
+    const u8 lang_sig[] = { 'L',0,'a',0,'n',0,'g',0,'u',0,'a',0,'g',0,'e',0 };
     const u8 picto_sig[] = { 
         0x50, 0x00, 0x69, 0x00, 0x63, 0x00, 0x74, 0x00, 0x6F, 0x00, 
         0x43, 0x00, 0x68, 0x00, 0x61, 0x00, 0x74, 0x00 
     }; 
-
     // "DS Download Play" (UTF-16LE)
     const u8 dlplay_sig[] = {
         0x44,0,0x53,0,0x20,0,0x44,0,0x6F,0,0x77,0,0x6E,0,0x6C,0,0x6F,0,0x61,0,0x64,0,0x20,0,0x50,0,0x6C,0,0x61,0,0x79,0
@@ -224,29 +258,28 @@ void patch_firmware_ui(u8 *fw) {
         0x54,0,0x68,0,0x65,0,0x72,0,0x65,0,0x20,0,0x69,0,0x73,0,0x20,0,0x6E,0,0x6F,0,0x20,0,0x47,0,0x42,0,0x41,0
     };
 
-	int str_offset = find_pattern(arm9_ptr, arm9_size, picto_sig, sizeof(picto_sig));
+	int lang_offset = find_pattern(arm9_ptr, arm9_size, lang_sig, sizeof(lang_sig));
+	int picto_offset = find_pattern(arm9_ptr, arm9_size, picto_sig, sizeof(picto_sig));
     int dl_offset  = find_pattern(arm9_ptr, arm9_size, dlplay_sig, sizeof(dlplay_sig));
     int ds_offset  = find_pattern(arm9_ptr, arm9_size, no_ds_sig, sizeof(no_ds_sig));
     int gba_offset = find_pattern(arm9_ptr, arm9_size, no_gba_sig, sizeof(no_gba_sig));
 
-    u32 addr_picto  = (str_offset != -1) ? (arm9_ram_addr + str_offset) : 0;
+    u32 addr_picto  = (picto_offset != -1) ? (arm9_ram_addr + picto_offset) : 0;
     u32 addr_dl     = (dl_offset  != -1) ? (arm9_ram_addr + dl_offset)  : 0;
     u32 addr_ds     = (ds_offset  != -1) ? (arm9_ram_addr + ds_offset)  : 0;
     u32 addr_gba    = (gba_offset != -1) ? (arm9_ram_addr + gba_offset) : 0;
 
-	if (str_offset != -1) {
+	if (lang_offset != -1) {
 		// --- Step 2a: Patch the UI string for visual feedback ---
-		text("Splitting PictoChat UI...");
-		// "Picto / Wifi" (UTF-16LE) - Fits within original length
+		text("Hijacking Language UI...");
+		// "Wifi Config" (UTF-16LE)
 		const u8 new_label[] = {
-			'P',0,'i',0,'c',0,'t',0,'o',0,' ',0,'/',0,' ',0,'W',0,'i',0,'f',0,'i',0, 0,0
+			'W',0,'i',0,'f',0,'i',0,' ',0,'C',0,'o',0,'n',0,'f',0,'i',0,'g',0, 0,0
 		};
 		// Be careful not to overflow original string buffer
-		if (sizeof(new_label) <= sizeof(picto_sig)) {
-			memcpy(arm9_ptr + str_offset, new_label, sizeof(new_label));
-		}
+		memcpy(arm9_ptr + lang_offset, new_label, sizeof(new_label));
 
-		u32 str_ram_addr = arm9_ram_addr + str_offset;
+		u32 str_ram_addr = arm9_ram_addr + lang_offset;
 		
         // Find the reference to this string in the code (The Menu Entry Structure)
         int ref_offset = find_pattern(arm9_ptr, arm9_size, (u8*)&str_ram_addr, 4);
@@ -262,23 +295,8 @@ void patch_firmware_ui(u8 *fw) {
                  u32 *ptr = (u32*)(arm9_ptr + ref_offset + i);
                  // Check if it's a pointer to Main RAM (0x02xxxxxx)
                  if ((*ptr & 0xFF000000) == 0x02000000) {
-                     u32 old_func_addr = *ptr;
                      u32 payload_ram_addr = arm9_ram_addr + payload_offset;
-
-                     // --- Splitter Logic ---
                      int p = 0;
-                     // 0: LDR R0, [PC, #offset] ; Load address of IPC Touch Y data
-                     payload_buffer[p++] = 0xE59F0000; // To be patched
-                     // 1: LDRH R1, [R0]         ; Load the 16-bit Y-coordinate
-                     payload_buffer[p++] = 0xE1D010B0;
-                     // 2: CMP R1, #96           ; Compare Y with 96 (screen midpoint)
-                     payload_buffer[p++] = 0xE3510060;
-                     // 3: BGT to Wifi Logic     ; If greater (bottom half), branch
-                     payload_buffer[p++] = 0xCA000001; // Jumps to index 6
-                     // 4: LDR R12, [PC, #offset]; Load original PictoChat function address
-                     payload_buffer[p++] = 0xE59FC000; // To be patched
-                     // 5: BX R12                ; Jump to original PictoChat function
-                     payload_buffer[p++] = 0xE12FFF1C;
                      
                      // --- Wifi Cfg Logic ---
                      // 6: Update Top Screen "WIFI SETTINGS"
@@ -286,67 +304,63 @@ void patch_firmware_ui(u8 *fw) {
                      payload_buffer[p++] = 0xE59F1000; // To be patched
                      payload_buffer[p++] = 0xE59F2000; // To be patched
                      payload_buffer[p++] = 0xEF00000C; // SWI 0x0C
-
-                     // 10: Copy "Connection A" (DS Game)
+                     
+                     // 4: Copy "Connection A" (DS Game)
                      payload_buffer[p++] = 0xE59F0000; // R0 = &str_conn_a
                      payload_buffer[p++] = 0xE59F1000; // R1 = addr_ds
                      payload_buffer[p++] = 0xE3A0200D; // R2 = 13 (26 bytes / 2)
                      payload_buffer[p++] = 0xEF00000B; // SWI 0x0B (CpuSet)
 
-                     // 14: Copy "Connection B" (PictoChat)
+                     // 8: Copy "Connection B" (PictoChat)
                      payload_buffer[p++] = 0xE59F0000; // R0 = &str_conn_b
                      payload_buffer[p++] = 0xE59F1000; // R1 = addr_picto
                      payload_buffer[p++] = 0xE3A0200D; // R2 = 13
                      payload_buffer[p++] = 0xEF00000B;
 
-                     // 18: Copy "Connection C" (Download Play)
+                     // 12: Copy "Connection C" (Download Play)
                      payload_buffer[p++] = 0xE59F0000; // R0 = &str_conn_c
                      payload_buffer[p++] = 0xE59F1000; // R1 = addr_dl
                      payload_buffer[p++] = 0xE3A0200D; // R2 = 13
                      payload_buffer[p++] = 0xEF00000B;
 
-                     // 22: Copy "WFC USB" (GBA)
+                     // 16: Copy "WFC USB" (GBA)
                      payload_buffer[p++] = 0xE59F0000; // R0 = &str_wfc_usb
                      payload_buffer[p++] = 0xE59F1000; // R1 = addr_gba
                      payload_buffer[p++] = 0xE3A02008; // R2 = 8 (16 bytes / 2)
                      payload_buffer[p++] = 0xEF00000B;
 
                      // --- SSID Entry State ---
-                     // 26: Call Keyboard for SSID
+                     // 20: Call Keyboard for SSID
                      payload_buffer[p++] = 0xE59F0000; // LDR R0, [PC, #offset_to_ssid_buffer]
                      payload_buffer[p++] = 0xE3A01020; // MOV R1, #32 (max length)
                      payload_buffer[p++] = 0xE59FC000; // LDR R12, [PC, #offset_to_keyboard_func]
                      payload_buffer[p++] = 0xE12FFF3C; // BLX R12
 
                      // --- Password Entry State ---
-                     // 30: Call Keyboard for Password
+                     // 24: Call Keyboard for Password
                      payload_buffer[p++] = 0xE59F0000; // LDR R0, [PC, #offset_to_pass_buffer]
                      payload_buffer[p++] = 0xE3A0103F; // MOV R1, #63 (max length)
                      payload_buffer[p++] = 0xE59FC000; // LDR R12, [PC, #offset_to_keyboard_func]
                      payload_buffer[p++] = 0xE12FFF3C; // BLX R12
                      
                      // --- Save State ---
-                     // 34: Save SSID buffer to internal RAM
+                     // 28: Save SSID buffer to internal RAM
                      payload_buffer[p++] = 0xE59F0000; // LDR R0, [PC, #offset_to_ssid_buffer]
                      payload_buffer[p++] = 0xE59F1000; // LDR R1, [PC, #offset_to_save_loc_ssid]
                      payload_buffer[p++] = 0xE3A02008; // MOV R2, #8 (32 bytes / 4 words)
                      payload_buffer[p++] = 0xEF00000B; // SWI CpuSet (word copy)
 
-                     // 38: Save Password buffer to internal RAM
+                     // 32: Save Password buffer to internal RAM
                      payload_buffer[p++] = 0xE59F0000; // LDR R0, [PC, #offset_to_pass_buffer]
                      payload_buffer[p++] = 0xE59F1000; // LDR R1, [PC, #offset_to_save_loc_pass]
                      payload_buffer[p++] = 0xE3A02010; // MOV R2, #16 (64 bytes / 4 words)
                      payload_buffer[p++] = 0xEF00000B; // SWI CpuSet (word copy)
                      
                      // Infinite loop (End)
-                     payload_buffer[p++] = 0xEAFFFFFE;
+                     payload_buffer[p++] = 0xEAFFFFFE; // B .
                      
                      // --- Data Constants ---
                      int data_idx = p;
-                     // Address of IPC Touch Y pixel
-                     payload_buffer[p++] = 0x027FF00A;
-                     // Address of Original Function
-                     payload_buffer[p++] = old_func_addr;
                      // Top Screen String Ptr (WIFI SETTINGS)
                      payload_buffer[p++] = 0; 
                      // VRAM address
@@ -358,9 +372,7 @@ void patch_firmware_ui(u8 *fw) {
                      payload_buffer[p++] = 0x027FF820; // SSID Save + 32 bytes
 
                      // Address of the firmware's keyboard function.
-                     // This MUST be found via reverse engineering and replaced.
-                     const u32 KEYBOARD_FUNC_ADDR_PLACEHOLDER = 0xDEADBEEF;
-                     payload_buffer[p++] = KEYBOARD_FUNC_ADDR_PLACEHOLDER;
+                     payload_buffer[p++] = addr_keyboard_func;
                      
                      // Addr DS
                      payload_buffer[p++] = addr_ds;
@@ -413,48 +425,44 @@ void patch_firmware_ui(u8 *fw) {
 
                      // --- Back-patching addresses and offsets ---
                      // String Pointers (RAM addresses)
-                     payload_buffer[data_idx + 2] = payload_ram_addr + (str_base_idx * 4); // Top Screen Str
-
-                     // LDR offsets
-                     payload_buffer[0] |= ((data_idx + 0) * 4) - (0 * 4 + 8); // Touch Y Addr
-                     payload_buffer[4] |= ((data_idx + 1) * 4) - (4 * 4 + 8); // Orig Func
+                     payload_buffer[data_idx + 0] = payload_ram_addr + (str_base_idx * 4); // Top Screen Str
                      
                      // Top Screen Update
-                     payload_buffer[6] |= ((data_idx + 2) * 4) - (6 * 4 + 8); // R0 = Top Str
-                     payload_buffer[7] |= ((data_idx + 3) * 4) - (7 * 4 + 8); // R1 = VRAM
-                     payload_buffer[8] |= ((data_idx + 4) * 4) - (8 * 4 + 8); // R2 = Size
+                     payload_buffer[0] |= ((data_idx + 0) * 4) - (0 * 4 + 8); // R0 = Top Str
+                     payload_buffer[1] |= ((data_idx + 1) * 4) - (1 * 4 + 8); // R1 = VRAM
+                     payload_buffer[2] |= ((data_idx + 2) * 4) - (2 * 4 + 8); // R2 = Size
 
                      // Connection A (DS)
-                     payload_buffer[10] = 0xE59F0000 | (((idx_str_a * 4) - (10 * 4 + 8)) & 0xFFF); // R0 = Str A
-                     payload_buffer[11] |= ((data_idx + 5) * 4) - (11 * 4 + 8); // R1 = Addr DS
+                     payload_buffer[4] = 0xE59F0000 | (((idx_str_a * 4) - (4 * 4 + 8)) & 0xFFF); // R0 = Str A
+                     payload_buffer[5] |= ((data_idx + 6) * 4) - (5 * 4 + 8); // R1 = Addr DS
 
                      // Connection B (Picto)
-                     payload_buffer[14] = 0xE59F0000 | (((idx_str_b * 4) - (14 * 4 + 8)) & 0xFFF);
-                     payload_buffer[15] |= ((data_idx + 6) * 4) - (15 * 4 + 8); // R1 = Addr Picto
+                     payload_buffer[8] = 0xE59F0000 | (((idx_str_b * 4) - (8 * 4 + 8)) & 0xFFF);
+                     payload_buffer[9] |= ((data_idx + 7) * 4) - (9 * 4 + 8); // R1 = Addr Picto
 
                      // Connection C (DL)
-                     payload_buffer[18] = 0xE59F0000 | (((idx_str_c * 4) - (18 * 4 + 8)) & 0xFFF);
-                     payload_buffer[19] |= ((data_idx + 7) * 4) - (19 * 4 + 8); // R1 = Addr DL
+                     payload_buffer[12] = 0xE59F0000 | (((idx_str_c * 4) - (12 * 4 + 8)) & 0xFFF);
+                     payload_buffer[13] |= ((data_idx + 8) * 4) - (13 * 4 + 8); // R1 = Addr DL
 
                      // WFC USB (GBA)
-                     payload_buffer[22] = 0xE59F0000 | (((idx_str_d * 4) - (22 * 4 + 8)) & 0xFFF);
-                     payload_buffer[23] |= ((data_idx + 8) * 4) - (23 * 4 + 8); // R1 = Addr GBA
+                     payload_buffer[16] = 0xE59F0000 | (((idx_str_d * 4) - (16 * 4 + 8)) & 0xFFF);
+                     payload_buffer[17] |= ((data_idx + 9) * 4) - (17 * 4 + 8); // R1 = Addr GBA
 
                      // SSID Keyboard Call
-                     payload_buffer[26] |= ((idx_ssid_buf * 4) - (26 * 4 + 8)) & 0xFFF; // R0 = &ssid_buffer
-                     payload_buffer[28] |= ((data_idx + 7) * 4) - (28 * 4 + 8); // R12 = &keyboard_func
+                     payload_buffer[20] |= ((idx_ssid_buf * 4) - (20 * 4 + 8)) & 0xFFF; // R0 = &ssid_buffer
+                     payload_buffer[22] |= ((data_idx + 5) * 4) - (22 * 4 + 8); // R12 = &keyboard_func
 
                      // Password Keyboard Call
-                     payload_buffer[30] |= ((idx_pass_buf * 4) - (30 * 4 + 8)) & 0xFFF; // R0 = &pass_buffer
-                     payload_buffer[32] |= ((data_idx + 7) * 4) - (32 * 4 + 8); // R12 = &keyboard_func
+                     payload_buffer[24] |= ((idx_pass_buf * 4) - (24 * 4 + 8)) & 0xFFF; // R0 = &pass_buffer
+                     payload_buffer[26] |= ((data_idx + 5) * 4) - (26 * 4 + 8); // R12 = &keyboard_func
 
                      // Save SSID
-                     payload_buffer[34] |= ((idx_ssid_buf * 4) - (34 * 4 + 8)) & 0xFFF; // R0 = &ssid_buffer
-                     payload_buffer[35] |= ((data_idx + 5) * 4) - (35 * 4 + 8); // R1 = &save_loc_ssid
+                     payload_buffer[28] |= ((idx_ssid_buf * 4) - (28 * 4 + 8)) & 0xFFF; // R0 = &ssid_buffer
+                     payload_buffer[29] |= ((data_idx + 3) * 4) - (29 * 4 + 8); // R1 = &save_loc_ssid
 
                      // Save Password
-                     payload_buffer[38] |= ((idx_pass_buf * 4) - (38 * 4 + 8)) & 0xFFF; // R0 = &pass_buffer
-                     payload_buffer[39] |= ((data_idx + 6) * 4) - (39 * 4 + 8); // R1 = &save_loc_pass
+                     payload_buffer[32] |= ((idx_pass_buf * 4) - (32 * 4 + 8)) & 0xFFF; // R0 = &pass_buffer
+                     payload_buffer[33] |= ((data_idx + 4) * 4) - (33 * 4 + 8); // R1 = &save_loc_pass
 
                      // Write payload to padding area
                      memcpy(arm9_ptr + payload_offset, payload_buffer, p * 4);
@@ -462,7 +470,7 @@ void patch_firmware_ui(u8 *fw) {
                      // Update Firmware Pointer
                      *ptr = payload_ram_addr;
                      found = 1;
-                     text("Button Split Logic Installed.");
+                     text("Wifi Config Injected.");
                      break;
                  }
             }
