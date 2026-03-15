@@ -80,11 +80,120 @@ static void dumpmem(u8 *addr) {
 	}
 }
 
-void memdump() {
+static void clear_line(int row) {
+	u16* p = (u16*)(SCREEN_BASE_BLOCK_SUB(0) + row * 64);
 	int i;
-	int k;
-	int sel=0;
-	int addr=0x2200000;
+	for (i = 0; i < 32; i++) {
+		p[i] = ' ';
+	}
+}
+
+static void print_text(int row, int col, const char* str) {
+	u16* p = (u16*)(SCREEN_BASE_BLOCK_SUB(0) + row * 64 + col * 2);
+	while (*str) {
+		*p++ = (*str++);
+	}
+}
+
+static int find_pattern(const u8 *data, u32 size, const u8 *pattern, u32 pat_len) {
+	u32 i, j;
+	if (!pat_len || !pattern || pat_len > size) return -1;
+	for (i = 0; i <= size - pat_len; i++) {
+		int match = 1;
+		for(j = 0; j < pat_len; j++) {
+			if(data[i+j] != pattern[j]) {
+				match = 0;
+				break;
+			}
+		}
+		if(match) return i;
+	}
+	return -1;
+}
+
+static int hex_char_to_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int hex_to_bytes(const char* hex_str, u8* out_buf, int max_bytes) {
+    int len = strlen(hex_str);
+    int i;
+    int count = 0;
+    if (len % 2 != 0) return 0; // Must be even length
+
+    for (i = 0; i < len; i += 2) {
+        int hi = hex_char_to_val(hex_str[i]);
+        int lo = hex_char_to_val(hex_str[i+1]);
+        if (hi == -1 || lo == -1) return 0; // Invalid hex char
+        if (count >= max_bytes) break;
+        out_buf[count++] = (hi << 4) | lo;
+    }
+    return count;
+}
+
+static int hex_input(char* buffer, int max_len) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    int pos = 0;
+    int len = 0;
+    int k;
+
+    buffer[0] = '\0';
+    clear_line(3);
+
+    while(1) {
+        swiWaitForVBlank();
+
+        // Draw UI
+        print_text(3, 0, buffer);
+        // Draw cursor
+        u16* p = (u16*)(SCREEN_BASE_BLOCK_SUB(0) + 3 * 64 + pos * 2);
+        *p |= 0x1000; // Highlight color
+
+        k = getkb();
+
+        if (k & (KEY_A | KEY_START)) return len;
+        if (k & KEY_B) return 0;
+
+        if (k & KEY_RIGHT) {
+            if (pos < max_len - 1) pos++;
+            if (pos >= len) { // Extend string if moving past end
+                buffer[pos] = '\0';
+                buffer[pos-1] = '0';
+                len = pos;
+            }
+        }
+        if (k & KEY_LEFT) {
+            if (pos > 0) pos--;
+        }
+
+        if (k & KEY_UP) {
+            int val = hex_char_to_val(buffer[pos]);
+            if (val == -1) val = 0;
+            val = (val + 1) % 16;
+            buffer[pos] = hex_chars[val];
+        }
+        if (k & KEY_DOWN) {
+            int val = hex_char_to_val(buffer[pos]);
+            if (val == -1) val = 0;
+            val = (val - 1 + 16) % 16;
+            buffer[pos] = hex_chars[val];
+        }
+
+        // Clear old cursor and text
+        clear_line(3);
+    }
+}
+
+void memdump() {
+	u32 addr=0x02000000; // Start at main RAM
+	int k_pressed, k_held;
+	
+	char search_str[65] = {0};
+	u8 search_pattern[32];
+	int search_len_bytes = 0;
 	
 	powerON(POWER_ALL);
 
@@ -93,37 +202,77 @@ void memdump() {
 	IME=0;
 	DISP_SR=DISP_VBLANK_IRQ;
 	IRQ_HANDLER=interrupthandler;
-	IE=IRQ_VBLANK;//|IRQ_FIFO_RECV;
+	IE=IRQ_VBLANK;
 	IF=~0;
 	IME=IME_ENABLED;
 
 	gfx_init();
-	k=KEY_UP;	
+	print_text(2, 0, "Up/Dn/L/R=Scroll B+Scroll=Fast");
+	print_text(3, 0, "L/R Trig=Page  Start=Search");
+	
+	// Initial Draw
+	hex32(0,addr,8);
+	dumpmem((u8*)addr);
+
 	while(1) {
 		swiWaitForVBlank();
-		if(k) {
-			switch(k) {
-				case KEY_A:
-					i=sel?1:4;
-					addr+=i<<((sel&7)*4);
-					break;
-				case KEY_B:
-					i=sel?1:4;
-					addr-=i<<((sel&7)*4);
-					break;
-				case KEY_LEFT:
-					sel++;
-					if(sel>=8) sel--;
-					break;
-				case KEY_RIGHT:
-					sel--;
-					if(sel<0) sel=0;
-					break;
+		k_pressed = getkb();
+		k_held = READ_KEYS;
+		
+		int needs_redraw = 0;
+		u32 old_addr = addr;
+
+		// --- Search ---
+		if (k_pressed & KEY_START) {
+			clear_line(2); clear_line(3);
+			print_text(2, 0, "Search (Hex):");
+			int input_len = hex_input(search_str, 64);
+			if (input_len > 0 && (input_len % 2 == 0)) {
+				search_len_bytes = hex_to_bytes(search_str, search_pattern, 32);
+				// Immediately do first search
+				k_pressed |= KEY_SELECT;
+			} else {
+				search_len_bytes = 0;
 			}
-			hex32(0,addr,sel);
+			needs_redraw = 1;
+		}
+
+		if ((k_pressed & KEY_SELECT) && search_len_bytes > 0) {
+			clear_line(2); clear_line(3);
+			print_text(2, 0, "Searching...");
+			swiWaitForVBlank();
+			int offset = find_pattern((u8*)(addr + 1), 0x08000000 - (addr + 1), search_pattern, search_len_bytes);
+			if (offset != -1) {
+				addr = addr + 1 + offset;
+				print_text(2, 0, "Found. Press SELECT for next.");
+			} else {
+				print_text(2, 0, "Not found from this address.");
+			}
+			needs_redraw = 1;
+		}
+
+		// --- Navigation ---
+		if (k_held) {
+			u32 step = (k_held & KEY_B) ? 0x100 : 1;
+			if (k_held & KEY_UP) addr += 16 * step;
+			if (k_held & KEY_DOWN) addr -= 16 * step;
+			if (k_held & KEY_RIGHT) addr += 1 * step;
+			if (k_held & KEY_LEFT) addr -= 1 * step;
+		}
+		if (k_pressed & KEY_R) addr += 23 * 16;
+		if (k_pressed & KEY_L) addr -= 23 * 16;
+
+		if (addr != old_addr) needs_redraw = 1;
+
+		if(needs_redraw) {
+			if (!((k_pressed & KEY_START) || (k_pressed & KEY_SELECT))) {
+				clear_line(2); clear_line(3);
+				print_text(2, 0, "Up/Dn/L/R=Scroll B+Scroll=Fast");
+				print_text(3, 0, "L/R Trig=Page  Start=Search");
+			}
+			hex32(0,addr,8);
 			dumpmem((u8*)addr);
 		}
-		k=getkb();
 	}
 }
 
